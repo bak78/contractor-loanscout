@@ -1,0 +1,96 @@
+# Which US DOT carriers count as contractor leads, and how US DOT and Google
+# facts score. Edit and re-run — no code change needed.
+#
+# Source: the FMCSA Company Census — every business registered with the US
+# Department of Transportation to run commercial trucks, with its company
+# officers, phone and email. Free and public:
+# https://datahub.transportation.gov/d/az4n-8mr2
+
+# Default area. ZIP code starts narrow it; leave the list empty for the whole
+# state.
+state: PA
+zip_prefixes: ["191"]
+
+# Contractors looked up per run, best-ranked first. Each costs about one
+# Serper credit. The next run continues down the list.
+default_limit: 50
+
+# Cargo the carrier told US DOT it hauls. A carrier is a candidate when it
+# ticks any of these. Census column names; see the FMCSA data dictionary.
+#   crgo_construct  Construction
+#   crgo_bldgmat    Building materials (mostly suppliers — off by default)
+#   crgo_machlrg    Machinery, large objects
+cargo: [crgo_construct]
+
+# Fleet size limits (power units = trucks and tractors). A company with
+# hundreds of trucks is a national firm, not a small-business borrower.
+min_power_units: 1
+max_power_units: 150
+
+# A filing not updated in this many years usually means stale contacts or a
+# business that stopped trucking. Older filings are left out.
+max_years_since_update: 4
+
+# Never leads: suppliers, manufacturers, public bodies, utilities, and large
+# public companies. Matched against the legal and DBA names as whole words,
+# case-insensitively.
+exclude_name_words: [
+  "lumber", "supply", "supplies", "supplier", "manufacturing", "mfg", "millwork",
+  "materials", "wholesale", "distributors", "distribution", "rental", "rentals",
+  "equipment sales", "steel corp", "corporation of america", "railroad", "railway",
+  "university", "college", "school district", "county of", "city of", "township",
+  "borough of", "authority", "commonwealth", "department", "state of", "united states",
+  "u s government", "water company", "electric company", "gas company", "utilities",
+  "harsco", "home depot", "lowe's", "ferguson", "84 lumber", "united rentals", "sunbelt",
+]
+
+# Freight companies tick "construction" among many cargo types. A carrier
+# hauling only for hire (not its own work) is dropped when its name has one of
+# these words, or names no trade at all.
+freight_words: ["express", "logistics", "logistic", "transport", "transportation", "transportations", "freight",
+                "lines", "carriers", "carrier", "expedite", "expedited", "delivery", "dispatch",
+                "cargo", "shipping", "global", "worldwide", "international", "intermodal", "auto transport"]
+
+# Trades, read from the business name (the "trade" column). The first match
+# wins, so put specific trades before general ones. After a Run, Google's own
+# category is used when the name says nothing.
+trades:
+  - name: Excavation & site work
+    words: ["excavat", "site work", "sitework", "grading", "earthwork", "trenching", "demolition", "demo "]
+  - name: Paving & asphalt
+    words: ["paving", "asphalt", "sealcoat", "blacktop"]
+  - name: Concrete & masonry
+    words: ["concrete", "masonry", "cement", "mason", "stone", "brick", "foundation"]
+  - name: Roofing & siding
+    words: ["roofing", "roofer", "siding", "gutter"]
+  - name: Plumbing, heating & HVAC
+    words: ["plumbing", "heating", "hvac", "mechanical", "air conditioning", "cooling", "sewer", "drain"]
+  - name: Electrical
+    words: ["electric", "electrical", "lighting", "solar"]
+  - name: Landscaping & tree work
+    words: ["landscap", "lawn", "tree ", "nursery", "hardscape", "snow"]
+  - name: Hauling & dumpsters
+    words: ["hauling", "dumpster", "disposal", "waste", "rubbish", "trucking", "transport"]
+  - name: General contracting
+    words: ["construction", "contracting", "contractor", "builders", "building", "remodel",
+            "renovation", "restoration", "development", "carpentry", "framing", "drywall",
+            "painting", "flooring", "glass", "fence", "steel", "iron", "welding"]
+
+# Score weights for US DOT and Google facts. They join the website signals in
+# signals.yaml as "fit", so every point stays traceable to evidence.
+weights:
+  dot_registered: 8          # an active US DOT carrier hauling construction cargo
+  established: 10            # registered with US DOT at least established_years ago
+  established_years: 3
+  recently_updated: 6        # filing updated within the last 2 years: contacts are current
+  decision_maker:
+    owner: 14                # the officer's surname is in the business name
+    officer: 10              # a named company officer
+    unknown: 0
+  fleet_large: 14            # 10+ trucks
+  fleet_medium: 8            # 3-9 trucks
+  email_on_file: 6           # an email address filed with US DOT
+  google_listing: 10         # a Google listing matched at the US DOT address
+  reviews_many: 14           # 50+ Google ratings
+  reviews_some: 7            # 10-49 Google ratings
+  good_rating: 5             # 4.0 stars or better, from at least 10 ratings

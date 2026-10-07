@@ -1,0 +1,166 @@
+"""Turn one US DOT contractor into a scored lead.
+
+Census facts (who the officer is, how long it's been registered, fleet size,
+how recently it filed) and Google facts found through Serper (a matching
+listing, its rating and review count) become signal hits of their own, scored
+by the same engine as website text. Every point of a score is traceable to
+evidence: a row can say "fit 64 — 12 trucks, 15 drivers" next to the name.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from datetime import date
+
+from .config import Rules
+from .contacts import is_role_address
+from .crawl import SiteCrawl, crawl_site, is_crawlable
+from .dot import Contractor, ContractorRules
+from .fetch import PoliteFetcher
+from .places import Listing, PlacesClient
+from .score import Score, score_site
+from .signals import SignalHit, match_site
+
+DOT_SOURCE = "US DOT census"
+GOOGLE_SOURCE = "Google listing (Serper)"
+DEFAULT_TRADE = "Construction (trade not in name)"
+
+
+@dataclass(frozen=True)
+class Lead:
+    contractor: Contractor
+    listing: Listing
+    crawl: SiteCrawl | None
+    score: Score
+    trade: str
+    website_email: str = ""
+    website_email_page: str = ""
+    website_email_is_officer: bool = False
+
+
+def _hit(signal_id: str, weight: float, snippet: str, source: str) -> SignalHit:
+    return SignalHit(signal_id=signal_id, category="fit", weight=float(weight),
+                     snippet=snippet, source_url=source, page_type="registry")
+
+
+def dot_hits(c: Contractor, rules: ContractorRules, today: date | None = None) -> list[SignalHit]:
+    """What the census record says about this contractor."""
+    w = rules.weights
+    hits = [_hit("dot_registered", w.get("dot_registered", 8),
+                 f"Active US DOT carrier hauling construction cargo (USDOT {c.dot_number})", DOT_SOURCE)]
+
+    years = c.years_registered(today)
+    if years >= int(w.get("established_years", 3)):
+        hits.append(_hit("dot_established", w.get("established", 10),
+                         f"Registered with US DOT {c.registered} ({years} years)", DOT_SOURCE))
+    if c.years_since_update(today) < 2:
+        hits.append(_hit("dot_recently_updated", w.get("recently_updated", 6),
+                         f"Filing updated {c.updated}: contacts are current", DOT_SOURCE))
+
+    level_weight = (w.get("decision_maker") or {}).get(c.officer_level, 0)
+    if level_weight:
+        why = "surname in the business name" if c.officer_level == "owner" else "company officer"
+        hits.append(_hit(f"officer_{c.officer_level}", level_weight,
+                         f"Company officer: {c.officer_full} ({why})", DOT_SOURCE))
+
+    fleet = f"{c.power_units} trucks, {c.drivers} drivers"
+    if c.power_units >= 10:
+        hits.append(_hit("fleet_large", w.get("fleet_large", 14), fleet, DOT_SOURCE))
+    elif c.power_units >= 3:
+        hits.append(_hit("fleet_medium", w.get("fleet_medium", 8), fleet, DOT_SOURCE))
+
+    if c.email:
+        hits.append(_hit("email_on_file", w.get("email_on_file", 6), f"Email filed with US DOT: {c.email}",
+                         DOT_SOURCE))
+    return hits
+
+
+def google_hits(listing: Listing, rules: ContractorRules) -> list[SignalHit]:
+    """What the matched Google listing says: open, and how busy."""
+    if not listing.matched_on:
+        return []
+    w = rules.weights
+    hits = [_hit("google_listing", w.get("google_listing", 10),
+                 f"Google listing: {listing.name} — {listing.address} (matched on {listing.matched_on})",
+                 GOOGLE_SOURCE)]
+    stars = f"{listing.rating:.1f} stars from {listing.reviews} ratings"
+    if listing.reviews >= 50:
+        hits.append(_hit("google_reviews_many", w.get("reviews_many", 14), f"Google: {stars}", GOOGLE_SOURCE))
+    elif listing.reviews >= 10:
+        hits.append(_hit("google_reviews_some", w.get("reviews_some", 7), f"Google: {stars}", GOOGLE_SOURCE))
+    if listing.reviews >= 10 and listing.rating >= 4.0:
+        hits.append(_hit("google_good_rating", w.get("good_rating", 5), f"Google: {stars}", GOOGLE_SOURCE))
+    return hits
+
+
+def _letters(text: str) -> str:
+    return re.sub(r"[^a-z]", "", (text or "").lower())
+
+
+def email_belongs_to(email: str, first: str, last: str) -> bool:
+    """True when the address's mailbox carries the officer's name:
+    jane.doe@, jdoe@, doej@, jane@ — but never info@ or office@."""
+    if not email or is_role_address(email):
+        return False
+    local = _letters(email.partition("@")[0])
+    first, last = _letters(first), _letters(last)
+    # A short surname must sit at an end, or "Lee" would match fleet@.
+    if len(last) >= 4 and last in local:
+        return True
+    if len(last) == 3 and (local.startswith(last) or local.endswith(last)):
+        return True
+    return len(first) >= 3 and local.startswith(first)
+
+
+def website_email(crawl: SiteCrawl | None, c: Contractor) -> tuple[str, str, bool]:
+    """(email on the website, page it was on, whether it is the officer's own).
+    The officer's own mailbox beats the site's general best pick."""
+    if crawl is None or not crawl.pages:
+        return "", "", False
+    for page in crawl.pages:
+        for email in page.contacts.emails:
+            if email_belongs_to(email, c.officer_first, c.officer_last):
+                return email, page.url, True
+    contacts = crawl.contacts
+    return contacts.email, contacts.email_page, False
+
+
+def build_lead(
+    c: Contractor,
+    places: PlacesClient | None,
+    fetcher: PoliteFetcher | None,
+    rules: Rules,
+    contractor_rules: ContractorRules,
+    max_pages: int,
+    today: date | None = None,
+) -> Lead:
+    """Look the contractor up on Google, crawl its website, and score it.
+
+    Pass places=None for a free preview: census facts only, no lookups.
+    Raises SerperUnavailable (stop the run) or ConnectionError (retry this
+    contractor next run) from the lookup.
+    """
+    if places is None:
+        listing = Listing(note="preview: not looked up")
+    else:
+        listing = places.find(c.search_name, c.address, c.city, c.state, c.zip)
+        if not listing.matched_on:
+            listing = Listing(note=f"{listing.note}; may have moved, or works from a yard not on Google")
+
+    crawl = None
+    if fetcher is not None and listing.website and is_crawlable(listing.website, rules):
+        crawl = crawl_site(listing.website, fetcher, rules, max_pages)
+
+    site_email, site_page, is_officer = website_email(crawl, c)
+
+    # The name says the trade most of the time; Google's category otherwise.
+    trade = c.trade
+    if trade == DEFAULT_TRADE and listing.category:
+        trade = contractor_rules.trade_of(listing.category) or listing.category
+
+    hits = dot_hits(c, contractor_rules, today) + google_hits(listing, contractor_rules)
+    if crawl is not None and crawl.pages:
+        hits += match_site(crawl.pages, rules)
+
+    return Lead(c, listing, crawl, score_site(hits, rules), trade, site_email, site_page, is_officer)
