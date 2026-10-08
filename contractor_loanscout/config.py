@@ -71,6 +71,7 @@ class Settings:
     contact_email: str
     # Optional, free: lifts the US DOT data site's rate limit for anonymous use.
     socrata_app_token: str | None = None
+    hunter_api_key: str | None = None
 
     @property
     def user_agent(self) -> str:
@@ -180,4 +181,5 @@ def load_settings(signals_path: Path | str = DEFAULT_SIGNALS_PATH) -> Settings:
         serper_api_key=os.environ.get("SERPER_API_KEY") or None,
         contact_email=os.environ.get("CRAWLER_CONTACT_EMAIL", "unknown@example.com"),
         socrata_app_token=os.environ.get("SOCRATA_APP_TOKEN") or None,
+        hunter_api_key=os.environ.get("HUNTER_API_KEY") or None,
     )

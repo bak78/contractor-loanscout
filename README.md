@@ -49,9 +49,10 @@ are then cached for a week in `data\dot_cache`. A free `SOCRATA_APP_TOKEN` in
 
 | Column | Meaning |
 |---|---|
-| `first_name`, `last_name` | The first company officer named on the US DOT filing |
+| `first_name`, `last_name` | The first company officer named on the US DOT filing — or the second, when the email is theirs |
 | `decision_maker` | *owner* when the officer's surname is in the business name (Mike **Spano** & Sons), otherwise *company officer* |
-| `email` | Filed with US DOT; the website's address is in `website_email` beside it |
+| `email` | Filed with US DOT — or the officer's own address from the website or Hunter.io, when the filed one isn't theirs |
+| `email_belongs_to` | Whose inbox it is: *the officer named*, *company inbox*, *someone else at the company*, or *unclear* — see below |
 | `phone` | Filed with US DOT; `cell_phone` too when given |
 | `company_name` | The name the public knows it by (its DBA when it has one) |
 | `trade` | Read from the name (*Paving & asphalt*, *Roofing & siding*…), or from Google's category after a Run |
@@ -59,7 +60,8 @@ are then cached for a week in `data\dot_cache`. A free `SOCRATA_APP_TOKEN` in
 | `google_rating`, `google_reviews` | From the Google listing found through Serper |
 | `trucks`, `drivers` | Fleet size from the filing — a sign of business size |
 | `hauls` | *own work* (a contractor with its own trucks), *for hire*, or both |
-| `second_officer` | The second officer named, when there is one |
+| `second_officer` | The other officer named, when there is one |
+| `email_source`, `filed_email` | Where the email came from; the email filed with US DOT when another replaced it |
 
 Then the website, address, USDOT number, registration and filing dates,
 safety rating, the top three pieces of evidence, and notes.
@@ -97,6 +99,33 @@ In Philadelphia, 372 of 386 contractor leads pass.
 These checks can't tell whether one mailbox still exists (whether jsmith@ left
 the company). A paid verifier — NeverBounce, ZeroBounce — checks that for
 about a cent an address; worth it before a large send.
+
+## Whose email it is
+
+The US DOT form asks for the officers and *a* contact email, and the email is
+often whoever filled in the form. Northstar Contracting names Gary Bowman as
+its officer and filed `jryan@northstar.com`: "Hi Gary" would reach J. Ryan.
+`email_belongs_to` says which it is, so a message can be addressed right:
+
+| Value | Example | Address the message to |
+|---|---|---|
+| the officer named | `claudio@carusoneconstruction.com` | the officer |
+| company inbox | `info@…`, `lavalandscaping@gmail.com` | the company |
+| someone else at the company | `jryan@northstar.com` | the company, or that person |
+| unclear | `murf716@yahoo.com` | the company — it may or may not be the officer's |
+
+When the email is the *second* officer's, the row names them instead. In
+Philadelphia: 138 of 372 are the officer's, 113 a company inbox, 77 unclear,
+44 someone else.
+
+**Hunter.io (optional).** With `HUNTER_API_KEY` in `.env` (the same key as
+Healthcare LoanScout), a Run asks Hunter for the officer's own address
+whenever the email isn't theirs and the company has its own domain — from the
+filed email (`northstar.com`) or its website. For Northstar Hunter verified
+`gbowman@northstar.com`. Only verified addresses are used; the filed email
+moves to `filed_email`. Hunter can't search gmail-style addresses, so it
+helps the ~54 Philadelphia leads with a company domain, not the rest. Set
+`hunter_when: never` in `config\contractor.yaml` to turn it off.
 
 ## The score (weight)
 
@@ -140,8 +169,8 @@ notepad .env
 - **Contractors without registered trucks aren't in the census** — small
   trades working from pickups and vans usually aren't. It covers excavation,
   paving, concrete, roofing and hauling best.
-- **The email is sometimes the person who filed the form** (an office or
-  fleet manager), not the officer named.
+- **The email is often the person who filed the form** (an office or fleet
+  manager), not the officer named — `email_belongs_to` says so; see above.
 - **"Officer" has no title in the census.** The surname check marks likely
   owners; otherwise it's a named officer of the company.
 

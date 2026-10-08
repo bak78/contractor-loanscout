@@ -26,6 +26,7 @@ from .dot import (CensusClient, DotUnavailable, SearchStopped, check_zip_prefixe
 from .emailcheck import EmailChecker, EmailCheckUnavailable
 from .export import CsvWriter, build_row, sort_csv_by_score
 from .fetch import PoliteFetcher
+from .hunter import HunterClient, HunterUnavailable
 from .leads import build_lead
 from .places import PlacesClient, SerperUnavailable
 
@@ -36,7 +37,7 @@ EXIT_NO_MATCHES = 1  # the census has no contractor leads for this area
 EXIT_CONFIG_ERROR = 2  # missing key, bad settings, data site unreachable
 EXIT_DEPLETED = 3  # every matching contractor already processed
 EXIT_LOOKUPS_FAILED = 4  # contractors were attempted and none could be looked up
-EXIT_SERPER_UNAVAILABLE = 5  # bad key or out of credits; the run stopped early
+EXIT_SERPER_UNAVAILABLE = 5  # Serper or Hunter: bad key or out of credits; the run stopped early
 EXIT_INTERRUPTED = 130
 
 DEFAULT_OUT = "out/contractor_leads.csv"
@@ -72,9 +73,12 @@ class RunSummary:
     with_owner: int = 0
     with_phone: int = 0
     with_email: int = 0
+    with_officer_email: int = 0
     with_website: int = 0
     not_found: int = 0
     credits_used: int = 0
+    hunter_lookups: int = 0
+    hunter_found: int = 0
     serper_unavailable: bool = False
 
     def outcome(self) -> int:
@@ -105,10 +109,14 @@ class RunSummary:
         log.info("%-32s %d", "    surname in business name", self.with_owner)
         log.info("%-32s %d", "  with a phone number", self.with_phone)
         log.info("%-32s %d", "  with an email", self.with_email)
+        log.info("%-32s %d", "    the officer's own address", self.with_officer_email)
         log.info("%-32s %d", "  with a website", self.with_website)
         if self.not_found:
             log.info("%-32s %d", "  no Google listing", self.not_found)
         log.info("%-32s %d", "Serper credits used", self.credits_used)
+        if self.hunter_lookups:
+            log.info("%-32s %d  (%d verified emails found)", "Hunter searches", self.hunter_lookups,
+                     self.hunter_found)
         log.info("%-32s %d  ->  %s", "rows written", self.written, out_path)
         log.info(line)
 
@@ -118,8 +126,9 @@ def preview_path(out: str) -> str:
 
 
 def run_leads(options: RunOptions, stop: threading.Event | None = None,
-              census: CensusClient | None = None, places=None) -> int:
-    """census and places can be passed in (tests); otherwise real ones are made."""
+              census: CensusClient | None = None, places=None, hunter=None) -> int:
+    """census, places and hunter can be passed in (tests); otherwise real ones
+    are made — Hunter only when HUNTER_API_KEY is set."""
     stop = stop or threading.Event()
     try:
         settings = load_settings()
@@ -176,6 +185,11 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
 
     places = places or PlacesClient(api_key)
     fetcher = PoliteFetcher(settings.user_agent, default_delay=options.delay)
+    if hunter is None and settings.hunter_api_key and crules.hunter_when != "never":
+        hunter = HunterClient(settings.hunter_api_key)
+    if hunter is not None:
+        log.info("Hunter.io is on: when the filed email isn't the officer's own, it looks for theirs "
+                 "at the company's domain")
 
     try:
         with CsvWriter(options.out, resume=not options.no_resume) as writer:
@@ -195,7 +209,7 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
             with ThreadPoolExecutor(max_workers=options.workers) as pool:
                 futures = {
                     pool.submit(build_lead, c, places, fetcher, rules, crules, options.max_pages,
-                                email_checker=checker): c
+                                email_checker=checker, hunter=hunter): c
                     for c in pending
                 }
                 not_done = set(futures)
@@ -210,7 +224,7 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
                             summary.attempted += 1
                             try:
                                 lead = future.result()
-                            except SerperUnavailable as exc:
+                            except (SerperUnavailable, HunterUnavailable) as exc:
                                 log.error("%s — stopping; finished rows are saved", exc)
                                 summary.serper_unavailable = True
                                 raise
@@ -227,7 +241,7 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
                                      contractor.company_name,
                                      f"{row['first_name']} {row['last_name']}".strip() or "-",
                                      row["score"], row["email"] or row["phone"] or "-")
-                except (KeyboardInterrupt, SerperUnavailable):
+                except (KeyboardInterrupt, SerperUnavailable, HunterUnavailable):
                     fetcher.stop()
                     pool.shutdown(wait=False, cancel_futures=True)
                     raise
@@ -235,12 +249,16 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
         log.warning("stopped — %d rows already written to %s (run again to continue)",
                     summary.written, options.out)
         return EXIT_INTERRUPTED
-    except SerperUnavailable:
+    except (SerperUnavailable, HunterUnavailable):
         pass
     finally:
         summary.credits_used = getattr(places, "lookups", 0)
+        summary.hunter_lookups = getattr(hunter, "lookups", 0)
+        summary.hunter_found = getattr(hunter, "found", 0)
         fetcher.close()
         places.close()
+        if hunter is not None:
+            hunter.close()
 
     sort_csv_by_score(options.out)
     summary.report(options.out)
@@ -284,12 +302,14 @@ def _tally(summary: RunSummary, row: dict, lead) -> None:
     summary.written += 1
     if row["first_name"] and row["last_name"]:
         summary.with_name += 1
-        if lead.contractor.officer_level == "owner":
+        if lead.contact_level == "owner":
             summary.with_owner += 1
     if row["phone"]:
         summary.with_phone += 1
     if row["email"]:
         summary.with_email += 1
+        if lead.email_belongs_to == "officer":
+            summary.with_officer_email += 1
     if row["website"]:
         summary.with_website += 1
     if lead.listing.note and "may have moved" in lead.listing.note:

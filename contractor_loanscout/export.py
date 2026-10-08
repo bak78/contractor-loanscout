@@ -38,6 +38,9 @@ COLUMNS = [
     # More ways to reach them.
     "cell_phone",
     "second_officer",
+    "email_belongs_to",
+    "email_source",
+    "filed_email",
     "website_email",
     "phone_source",
     "website",
@@ -75,6 +78,15 @@ COLUMNS = [
     "key",
 ]
 
+# Whose inbox the email is, so a message can be addressed right: "Hi Gary"
+# only reaches Gary when the address is his.
+EMAIL_BELONGS_TO = {
+    "officer": "the officer named",
+    "company inbox": "company inbox (address the company, not the officer)",
+    "someone else": "someone else at the company (often who filed the form)",
+    "unclear": "unclear (a personal mailbox; may or may not be the officer's)",
+}
+
 DECISION_MAKER = {
     "owner": "owner (surname in business name)",
     "officer": "company officer",
@@ -103,9 +115,7 @@ def build_row(lead: Lead, rules: Rules) -> dict:
     else:
         phone, phone_source = "", ""
 
-    # The census email is the one the business filed; the website's is kept
-    # beside it, and used when the census has none.
-    email = c.email or lead.website_email
+    email = lead.email
 
     evidence = [h.describe() for h in score.top_hits(3)]
     evidence += [""] * (3 - len(evidence))
@@ -119,13 +129,13 @@ def build_row(lead: Lead, rules: Rules) -> dict:
         notes.append("website not crawled (social media or directory page)")
 
     other_emails = [e for e in ((contacts.email,) + contacts.other_emails if contacts else ())
-                    if e and e not in (email, lead.website_email)]
+                    if e and e not in (email, lead.website_email, lead.filed_email)]
 
     return {
-        "first_name": c.officer_first,
-        "last_name": c.officer_last,
-        "title": "Company officer" if c.officer_first else "",
-        "decision_maker": DECISION_MAKER.get(c.officer_level, c.officer_level),
+        "first_name": lead.contact_first,
+        "last_name": lead.contact_last,
+        "title": "Company officer" if lead.contact_first else "",
+        "decision_maker": DECISION_MAKER.get(lead.contact_level, lead.contact_level),
         "email": email,
         "phone": phone,
         "company_name": c.company_name,
@@ -137,7 +147,10 @@ def build_row(lead: Lead, rules: Rules) -> dict:
         "google_rating": f"{listing.rating:.1f}" if listing.rating else "",
         "google_reviews": listing.reviews if listing.matched_on else "",
         "cell_phone": c.cell_phone,
-        "second_officer": c.second_officer,
+        "second_officer": lead.other_officer,
+        "email_belongs_to": EMAIL_BELONGS_TO.get(lead.email_belongs_to, lead.email_belongs_to),
+        "email_source": lead.email_source,
+        "filed_email": lead.filed_email,
         "website_email": (lead.website_email + (" (officer's own)" if lead.website_email_is_officer else "")
                           if lead.website_email and lead.website_email != email else ""),
         "phone_source": phone_source,

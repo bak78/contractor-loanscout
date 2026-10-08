@@ -24,6 +24,15 @@ require_email: true
 # filing service or agent, not the business, and doesn't count.
 agent_email_carriers: 5
 
+# Hunter.io (optional: HUNTER_API_KEY in .env). The email on a US DOT filing is
+# often whoever filled in the form (jryan@ for officer Gary Bowman). When the
+# email isn't the officer's own and the company has its own domain, Hunter is
+# asked for the officer's address there; only verified ones are used, and the
+# filed email is kept in its own column. Each address found uses one credit.
+#   not_officer  ask Hunter whenever the email isn't the officer's own
+#   never        don't use Hunter
+hunter_when: not_officer
+
 # Cargo the carrier told US DOT it hauls. A carrier is a candidate when it
 # ticks any of these. Census column names; see the FMCSA data dictionary.
 #   crgo_construct  Construction

@@ -87,6 +87,7 @@ class ContractorRules:
     freight_words: tuple[str, ...] = ()
     require_email: bool = True
     agent_email_carriers: int = 5
+    hunter_when: str = "not_officer"
 
     def excluded(self, *names: str) -> str:
         """Why a carrier is never a lead, by its names, or ''."""
@@ -157,7 +158,15 @@ def load_contractor_rules(path: Path | str = DEFAULT_CONTRACTOR_PATH) -> Contrac
         freight_words=tuple(str(w) for w in raw.get("freight_words") or []),
         require_email=bool(raw.get("require_email", True)),
         agent_email_carriers=int(raw.get("agent_email_carriers", 5)),
+        hunter_when=_hunter_when(raw.get("hunter_when", "not_officer")),
     )
+
+
+def _hunter_when(value) -> str:
+    value = str(value).strip().lower()
+    if value not in ("not_officer", "never"):
+        raise ConfigError(f"contractor.yaml hunter_when must be 'not_officer' or 'never', got {value!r}")
+    return value
 
 
 def check_zip_prefixes(prefixes) -> None:
