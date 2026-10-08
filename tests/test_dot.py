@@ -212,7 +212,8 @@ class FakeSession:
         n = max(0, min(size, self.count - start))
         return FakeResponse([
             carrier(dot_number=str(1000 + start + i), legal_name=f"CONTRACTOR {start + i} PAVING",
-                    company_officer_1=f"JOHN DOE{chr(65 + i % 26)}", phy_street=f"{i} MAIN ST")
+                    company_officer_1=f"JOHN DOE{chr(65 + i % 26)}", phy_street=f"{i} MAIN ST",
+                    email_address=f"contractor{start + i}@gmail.com")
             for i in range(n)
         ])
 

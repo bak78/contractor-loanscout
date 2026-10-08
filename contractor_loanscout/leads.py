@@ -16,6 +16,7 @@ from datetime import date
 from .config import Rules
 from .contacts import is_role_address
 from .crawl import SiteCrawl, crawl_site, is_crawlable
+from .emailcheck import FREE_MAIL, EmailChecker, domain_of
 from .dot import Contractor, ContractorRules
 from .fetch import PoliteFetcher
 from .places import Listing, PlacesClient
@@ -113,17 +114,36 @@ def email_belongs_to(email: str, first: str, last: str) -> bool:
     return len(first) >= 3 and local.startswith(first)
 
 
-def website_email(crawl: SiteCrawl | None, c: Contractor) -> tuple[str, str, bool]:
+def email_is_theirs(email: str, site_domain: str) -> bool:
+    """An address on the business's own domain, or a gmail-style mailbox it
+    lists on its own site — not a web designer's or a directory's."""
+    domain = domain_of(email)
+    if site_domain and (domain == site_domain or domain.endswith("." + site_domain)):
+        return True
+    return domain in FREE_MAIL
+
+
+def website_email(crawl: SiteCrawl | None, c: Contractor,
+                  checker: EmailChecker | None = None) -> tuple[str, str, bool]:
     """(email on the website, page it was on, whether it is the officer's own).
-    The officer's own mailbox beats the site's general best pick."""
+    The officer's own mailbox beats the site's general best pick. Only the
+    business's own addresses count, and, given a checker, only ones that pass it."""
     if crawl is None or not crawl.pages:
         return "", "", False
+
+    def usable(email: str) -> bool:
+        return email_is_theirs(email, crawl.domain) and (checker is None or checker.ok(email))
+
     for page in crawl.pages:
         for email in page.contacts.emails:
-            if email_belongs_to(email, c.officer_first, c.officer_last):
+            if email_belongs_to(email, c.officer_first, c.officer_last) and usable(email):
                 return email, page.url, True
     contacts = crawl.contacts
-    return contacts.email, contacts.email_page, False
+    for email in (contacts.email,) + contacts.other_emails:
+        if email and usable(email):
+            page = next((p.url for p in crawl.pages if email in p.contacts.emails), contacts.email_page)
+            return email, page, False
+    return "", "", False
 
 
 def build_lead(
@@ -134,6 +154,7 @@ def build_lead(
     contractor_rules: ContractorRules,
     max_pages: int,
     today: date | None = None,
+    email_checker: EmailChecker | None = None,
 ) -> Lead:
     """Look the contractor up on Google, crawl its website, and score it.
 
@@ -152,7 +173,7 @@ def build_lead(
     if fetcher is not None and listing.website and is_crawlable(listing.website, rules):
         crawl = crawl_site(listing.website, fetcher, rules, max_pages)
 
-    site_email, site_page, is_officer = website_email(crawl, c)
+    site_email, site_page, is_officer = website_email(crawl, c, email_checker)
 
     # The name says the trade most of the time; Google's category otherwise.
     trade = c.trade

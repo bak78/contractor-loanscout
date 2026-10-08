@@ -19,7 +19,7 @@ import json
 import logging
 import re
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -85,6 +85,8 @@ class ContractorRules:
     trades: tuple[Trade, ...]
     weights: dict = field(default_factory=dict)
     freight_words: tuple[str, ...] = ()
+    require_email: bool = True
+    agent_email_carriers: int = 5
 
     def excluded(self, *names: str) -> str:
         """Why a carrier is never a lead, by its names, or ''."""
@@ -153,6 +155,8 @@ def load_contractor_rules(path: Path | str = DEFAULT_CONTRACTOR_PATH) -> Contrac
         trades=tuple(trades),
         weights=dict(raw.get("weights") or {}),
         freight_words=tuple(str(w) for w in raw.get("freight_words") or []),
+        require_email=bool(raw.get("require_email", True)),
+        agent_email_carriers=int(raw.get("agent_email_carriers", 5)),
     )
 
 
@@ -467,9 +471,20 @@ def find_contractors(client: CensusClient, rules: ContractorRules, state: str,
     cargo, minus suppliers, public bodies, big fleets and stale filings."""
     records = client.search(state, zip_prefixes, rules.cargo)
     log.info("US DOT census: %d active carriers hauling construction cargo found", len(records))
+
+    # A filing service enters its own email on every carrier it files for.
+    carriers_by_email: dict[str, set[str]] = {}
+    for record in records:
+        email = (record.get("email_address") or "").strip().lower()
+        if email:
+            carriers_by_email.setdefault(email, set()).add(str(record.get("dot_number") or ""))
+    agents = {e for e, dots in carriers_by_email.items() if len(dots) >= rules.agent_email_carriers}
+
     leads = []
     for record in records:
         contractor = parse_carrier(record, rules, today)
         if contractor is not None:
+            if contractor.email in agents:
+                contractor = replace(contractor, email="")
             leads.append(contractor)
     return leads

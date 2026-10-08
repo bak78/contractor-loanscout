@@ -16,12 +16,14 @@ import logging
 import sys
 import threading
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from collections import Counter
 from dataclasses import dataclass
 
 from .config import ConfigError, load_settings
 from .crawl import DEFAULT_MAX_PAGES
 from .dot import (CensusClient, DotUnavailable, SearchStopped, check_zip_prefixes,
                   find_contractors, load_contractor_rules)
+from .emailcheck import EmailChecker, EmailCheckUnavailable
 from .export import CsvWriter, build_row, sort_csv_by_score
 from .fetch import PoliteFetcher
 from .leads import build_lead
@@ -60,6 +62,8 @@ class RunSummary:
     """Where every contractor ended up. Printed at the end of a run."""
 
     matching: int = 0
+    no_email: int = 0
+    shared_email: int = 0
     already_done: int = 0
     attempted: int = 0
     written: int = 0
@@ -88,6 +92,10 @@ class RunSummary:
         line = "-" * 58
         log.info(line)
         log.info("%-32s %d", "contractors matching", self.matching)
+        if self.no_email:
+            log.info("%-32s %d", "  left out: no working email", self.no_email)
+        if self.shared_email:
+            log.info("%-32s %d", "  left out: email already used", self.shared_email)
         if self.already_done:
             log.info("%-32s %d", "skipped (already done)", self.already_done)
         log.info("%-32s %d", "processed this run", self.attempted)
@@ -156,6 +164,13 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
         reverse=True,
     )
 
+    checker = EmailChecker()
+    if crules.require_email:
+        ranked = keep_working_emails(ranked, checker, summary)
+        if not ranked:
+            log.warning("no contractor here has a working email on file")
+            return EXIT_NO_MATCHES
+
     if options.dry_run:
         return _preview(ranked, options, limit, rules, crules, summary)
 
@@ -179,7 +194,8 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
 
             with ThreadPoolExecutor(max_workers=options.workers) as pool:
                 futures = {
-                    pool.submit(build_lead, c, places, fetcher, rules, crules, options.max_pages): c
+                    pool.submit(build_lead, c, places, fetcher, rules, crules, options.max_pages,
+                                email_checker=checker): c
                     for c in pending
                 }
                 not_done = set(futures)
@@ -229,6 +245,39 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
     sort_csv_by_score(options.out)
     summary.report(options.out)
     return summary.outcome()
+
+
+def keep_working_emails(ranked: list, checker: EmailChecker, summary: RunSummary) -> list:
+    """The contractors whose census email passes the checks, best first, with
+    each address kept only once (sister companies often share one inbox).
+    Free — done before any lookup, so no credits go to the rest."""
+    def check(email: str) -> str:
+        try:
+            return checker.problem(email)
+        except EmailCheckUnavailable:
+            return "couldn't check the domain (try again later)"
+
+    emails = sorted({c.email for c in ranked if c.email})
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        problems = dict(zip(emails, pool.map(check, emails)))
+
+    kept, used, why = [], set(), Counter()
+    for c in ranked:
+        problem = problems.get(c.email, "no email") if c.email else "no email on file"
+        if problem:
+            why[problem] += 1
+        elif c.email in used:
+            summary.shared_email += 1
+        else:
+            used.add(c.email)
+            kept.append(c)
+    summary.no_email = sum(why.values())
+    log.info("%d have a working email; left out: %s", len(kept),
+             ", ".join(f"{n} {reason}" for reason, n in why.most_common()) or "none")
+    if summary.shared_email:
+        log.info("%d more share an email with a higher-ranked contractor (same owner) — "
+                 "each inbox is listed once", summary.shared_email)
+    return kept
 
 
 def _tally(summary: RunSummary, row: dict, lead) -> None:

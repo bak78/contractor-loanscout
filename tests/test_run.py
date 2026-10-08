@@ -8,7 +8,7 @@ import pytest
 
 from contractor_loanscout import cli, leads
 from contractor_loanscout.crawl import SiteCrawl
-from contractor_loanscout.dot import load_contractor_rules, parse_carrier
+from contractor_loanscout.dot import find_contractors, load_contractor_rules, parse_carrier
 from contractor_loanscout.export import COLUMNS, build_row
 from contractor_loanscout.extract import build_page
 from contractor_loanscout.places import Listing, SerperUnavailable
@@ -253,3 +253,42 @@ def test_stop_during_lookups_keeps_finished_rows(workdir):
     result = cli.run_leads(options, stop, census=_census(20), places=SlowPlaces(listing(website="")))
     assert result == cli.EXIT_INTERRUPTED
     assert len(_rows(workdir / "out/leads.csv")) < 20
+
+
+# --- only leads with a working email ----------------------------------------------------------
+
+
+def test_contractors_without_a_working_email_are_left_out_before_any_lookup(workdir, monkeypatch):
+    emails = {0: "", 1: "none@none.com", 2: "bob@gmial.com", 3: "contractor3@gmail.com",
+              4: "contractor3@gmail.com", 5: "contractor5@gmail.com"}
+
+    class Session(FakeSession):
+        def get(self, url, params, timeout):
+            response = super().get(url, params, timeout)
+            for i, rec in enumerate(response.payload if isinstance(response.payload, list) else []):
+                rec["email_address"] = emails[i]
+            return response
+
+    places = StubPlaces(listing(website=""))
+    options = cli.RunOptions(zip_prefixes=("191",), limit=0, out="out/leads.csv")
+    assert cli.run_leads(options, census=client(Session(6)), places=places) == cli.EXIT_OK
+    rows = _rows(workdir / "out/leads.csv")
+    assert sorted(r["email"] for r in rows) == ["contractor3@gmail.com", "contractor5@gmail.com"]
+    assert places.lookups == 2, "no credits spent on the ones left out"
+
+
+def test_an_email_filed_for_many_carriers_is_an_agents(crules):
+    class Session(FakeSession):
+        def get(self, url, params, timeout):
+            response = super().get(url, params, timeout)
+            for rec in response.payload:
+                rec["email_address"] = "filings@dotcompliance.com"
+            return response
+
+    found = find_contractors(client(Session(5)), crules, "PA", ("191",), TODAY)
+    assert {c.email for c in found} == {""}
+
+
+def test_a_website_email_on_someone_elses_domain_is_not_theirs(crules):
+    crawl = crawl_of(("https://spanoandsons.com/", "<footer>Site by design@webshop.com</footer>"))
+    assert leads.website_email(crawl, contractor(crules)) == ("", "", False)

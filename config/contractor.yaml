@@ -15,6 +15,15 @@ zip_prefixes: ["191"]
 # Serper credit. The next run continues down the list.
 default_limit: 50
 
+# Leave out every contractor without a working email filed with US DOT: one
+# that is shaped right, isn't a placeholder or misspelling, and whose domain
+# accepts mail. Checked before any lookup, so no credits go to them.
+require_email: true
+
+# An email filed for this many different carriers or more belongs to a
+# filing service or agent, not the business, and doesn't count.
+agent_email_carriers: 5
+
 # Cargo the carrier told US DOT it hauls. A carrier is a candidate when it
 # ticks any of these. Census column names; see the FMCSA data dictionary.
 #   crgo_construct  Construction

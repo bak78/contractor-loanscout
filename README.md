@@ -79,6 +79,25 @@ safety rating, the top three pieces of evidence, and notes.
 In Philadelphia this takes 1,011 census carriers hauling construction cargo
 down to about 390 contractor leads.
 
+## Only leads with a working email
+
+Every row has an email that passed these checks, run on the census before any
+Google lookup, so no credits go to the rest (set `require_email: false` in
+`config\contractor.yaml` to turn this off):
+
+- it is a real address — not a placeholder (none@, test@) or no-reply box,
+  and not a misspelled domain (gmial.com, comcast.com);
+- its domain exists and accepts mail (DNS lists a mail server for it);
+- it isn't a filing service's — an address filed for 5 or more carriers;
+- no higher-ranked contractor uses it — sister companies often share an
+  inbox, and each person should get one email.
+
+In Philadelphia, 372 of 386 contractor leads pass.
+
+These checks can't tell whether one mailbox still exists (whether jsmith@ left
+the company). A paid verifier — NeverBounce, ZeroBounce — checks that for
+about a cent an address; worth it before a large send.
+
 ## The score (weight)
 
 Every point comes from a piece of evidence, shown in the `evidence_` columns:
