@@ -15,6 +15,7 @@ import argparse
 import logging
 import sys
 import threading
+import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from collections import Counter
 from dataclasses import dataclass
@@ -23,7 +24,7 @@ from .config import ConfigError, load_settings
 from .crawl import DEFAULT_MAX_PAGES
 from .dot import (CensusClient, DotUnavailable, SearchStopped, check_zip_prefixes,
                   find_contractors, load_contractor_rules)
-from .emailcheck import EmailChecker, EmailCheckUnavailable
+from .emailcheck import EmailChecker, EmailCheckUnavailable, domain_of
 from .export import CsvWriter, build_row, sort_csv_by_score
 from .fetch import PoliteFetcher
 from .hunter import HunterClient, HunterUnavailable
@@ -175,7 +176,11 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
 
     checker = EmailChecker()
     if crules.require_email:
-        ranked = keep_working_emails(ranked, checker, summary)
+        try:
+            ranked = keep_working_emails(ranked, checker, summary, stop)
+        except SearchStopped:
+            log.warning("stopped while checking emails — nothing was written")
+            return EXIT_INTERRUPTED
         if not ranked:
             log.warning("no contractor here has a working email on file")
             return EXIT_NO_MATCHES
@@ -265,19 +270,52 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
     return summary.outcome()
 
 
-def keep_working_emails(ranked: list, checker: EmailChecker, summary: RunSummary) -> list:
+EMAIL_CHECK_WORKERS = 32
+UNREACHABLE = "couldn't check the domain (try again later)"
+
+
+def keep_working_emails(ranked: list, checker: EmailChecker, summary: RunSummary,
+                        stop: threading.Event | None = None) -> list:
     """The contractors whose census email passes the checks, best first, with
     each address kept only once (sister companies often share one inbox).
-    Free — done before any lookup, so no credits go to the rest."""
-    def check(email: str) -> str:
-        try:
-            return checker.problem(email)
-        except EmailCheckUnavailable:
-            return "couldn't check the domain (try again later)"
+    Free — done before any lookup, so no credits go to the rest.
 
+    Each email domain is asked about once, many at a time. A whole state has
+    thousands, and a slow one takes seconds, so Stop is checked twice a second
+    and progress is reported while it runs. Raises SearchStopped on Stop."""
+    stop = stop or threading.Event()
     emails = sorted({c.email for c in ranked if c.email})
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        problems = dict(zip(emails, pool.map(check, emails)))
+    domains = sorted({domain_of(e) for e in emails if checker.needs_dns(e)})
+
+    unreachable: set[str] = set()
+
+    def ask(domain: str) -> None:
+        try:
+            checker.domain_problem(domain)
+        except EmailCheckUnavailable:
+            unreachable.add(domain)
+
+    if domains:
+        log.info("checking %d email domains...", len(domains))
+    # Not a with-block: leaving one waits for every running check, which is
+    # what made Stop slow. On Stop, checks not started are cancelled and the
+    # few running ones finish in the background.
+    pool = ThreadPoolExecutor(max_workers=EMAIL_CHECK_WORKERS)
+    try:
+        pending = {pool.submit(ask, d) for d in domains}
+        last_report = time.monotonic()
+        while pending:
+            if stop.is_set():
+                raise SearchStopped()
+            _, pending = wait(pending, timeout=0.5)
+            if pending and time.monotonic() - last_report >= 10:
+                log.info("  checked %d of %d email domains", len(domains) - len(pending), len(domains))
+                last_report = time.monotonic()
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+    # Every domain's answer is now remembered, so these return at once.
+    problems = {e: UNREACHABLE if domain_of(e) in unreachable else checker.problem(e) for e in emails}
 
     kept, used, why = [], set(), Counter()
     for c in ranked:

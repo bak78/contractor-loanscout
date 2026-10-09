@@ -293,3 +293,47 @@ def test_an_email_filed_for_many_carriers_is_an_agents(crules):
 def test_a_website_email_on_someone_elses_domain_is_not_theirs(crules):
     crawl = crawl_of(("https://spanoandsons.com/", "<footer>Site by design@webshop.com</footer>"))
     assert leads.website_email(crawl, contractor(crules)) == ("", "", False)
+
+
+# --- the email check on a big area ------------------------------------------------------------
+
+
+class SlowResolver:
+    """DNS that takes a while to answer each domain, like a whole state's worth."""
+
+    def __init__(self, delay):
+        self.delay = delay
+        self.asked = []
+
+    def resolve(self, domain, kind):
+        import time
+        self.asked.append(domain)
+        time.sleep(self.delay)
+
+        class Mx:
+            exchange = f"mx.{domain}."
+        return [Mx()]
+
+
+def test_stop_during_the_email_check_is_prompt(crules):
+    import time
+    from contractor_loanscout.dot import SearchStopped
+    from contractor_loanscout.emailcheck import EmailChecker
+
+    many = [contractor(crules, dot_number=str(i), email_address=f"office@contractor{i}.com") for i in range(200)]
+    stop = threading.Event()
+    threading.Timer(0.3, stop.set).start()
+    started = time.monotonic()
+    with pytest.raises(SearchStopped):
+        cli.keep_working_emails(many, EmailChecker(resolver=SlowResolver(2.0)), cli.RunSummary(), stop)
+    assert time.monotonic() - started < 1.5, "Stop shouldn't wait for every domain"
+
+
+def test_each_email_domain_is_asked_once(crules):
+    from contractor_loanscout.emailcheck import EmailChecker
+
+    resolver = SlowResolver(0)
+    shared = [contractor(crules, dot_number=str(i), email_address=f"person{i}@bigcontractor.com") for i in range(5)]
+    kept = cli.keep_working_emails(shared, EmailChecker(resolver=resolver), cli.RunSummary())
+    assert len(kept) == 5
+    assert resolver.asked == ["bigcontractor.com"]

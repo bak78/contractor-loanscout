@@ -79,6 +79,18 @@ class EmailChecker:
     def problem(self, email: str) -> str:
         """Why the address shouldn't be sent to, or '' when it passes.
         Raises EmailCheckUnavailable when DNS can't be reached."""
+        answer = self._without_dns(email)
+        return answer if answer is not None else self.domain_problem(domain_of(email))
+
+    def ok(self, email: str) -> bool:
+        return self.problem(email) == ""
+
+    def needs_dns(self, email: str) -> bool:
+        """Whether checking this address means asking DNS about its domain."""
+        return self._without_dns(email) is None
+
+    def _without_dns(self, email: str) -> str | None:
+        """The verdict from the address alone, or None when DNS must decide."""
         email = (email or "").strip().lower()
         if not email:
             return "no email"
@@ -91,12 +103,11 @@ class EmailChecker:
             return f"misspelled domain (meant {_TYPO_DOMAINS[domain]}?)"
         if domain in _KNOWN_GOOD:
             return ""
-        return self._domain_problem(domain)
+        return None
 
-    def ok(self, email: str) -> bool:
-        return self.problem(email) == ""
-
-    def _domain_problem(self, domain: str) -> str:
+    def domain_problem(self, domain: str) -> str:
+        """Whether the domain takes mail; each domain is asked once per run.
+        Raises EmailCheckUnavailable when DNS can't be reached."""
         with self._lock:
             if domain in self._domains:
                 return self._domains[domain]
