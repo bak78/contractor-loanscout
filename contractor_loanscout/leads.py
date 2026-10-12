@@ -19,7 +19,7 @@ from .crawl import SiteCrawl, crawl_site, is_crawlable, registered_domain
 from .emailcheck import FREE_MAIL, EmailChecker, domain_of
 from .dot import Contractor, ContractorRules, split_person
 from .fetch import PoliteFetcher
-from .hunter import HunterClient
+from .emailfinder import describe
 from .places import Listing, PlacesClient
 from .score import Score, score_site
 from .signals import SignalHit, match_site
@@ -212,7 +212,7 @@ def build_lead(
     max_pages: int,
     today: date | None = None,
     email_checker: EmailChecker | None = None,
-    hunter: HunterClient | None = None,
+    email_finder=None,
 ) -> Lead:
     """Look the contractor up on Google, crawl its website, and score it.
 
@@ -236,7 +236,8 @@ def build_lead(
     # Who the row addresses, and which email reaches them. The filed email is
     # often whoever filled in the form; when it names the second officer, the
     # row addresses them instead, and when it's nobody's in particular, the
-    # officer's own address is looked for: on the website, then with Hunter.
+    # officer's own address is looked for: on the website, then with the
+    # email finder (Anymailfinder or Hunter).
     first, last, level, other = c.officer_first, c.officer_last, c.officer_level, c.second_officer
     email, source, filed = c.email, "US DOT filing", ""
     belongs = email_owner(c.email, c) if c.email else ""
@@ -249,13 +250,13 @@ def build_lead(
     if belongs not in ("officer", "") and first:
         if site_email and is_officer:
             email, source, belongs, filed = site_email, f"website ({site_page})", "officer", c.email
-        elif hunter is not None and contractor_rules.hunter_when == "not_officer":
+        elif email_finder is not None and contractor_rules.email_finder_when == "not_officer":
             domain = company_domain(c, listing, rules)
-            found = hunter.find(domain, first, last) if domain else None
+            found = email_finder.find(domain, first, last) if domain else None
             if found and found.email and email_is_theirs(found.email, domain) and (
                     email_checker is None or email_checker.ok(found.email)):
                 email, belongs, filed = found.email, "officer", c.email
-                source = f"Hunter.io (verified, confidence {found.score})"
+                source = describe(email_finder, found)
 
     # The name says the trade most of the time; Google's category otherwise.
     trade = c.trade

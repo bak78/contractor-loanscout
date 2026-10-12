@@ -129,6 +129,7 @@ def test_the_second_officers_email_makes_them_the_contact(rules, crules):
 
 
 class StubHunter:
+    name = "Hunter.io"
     def __init__(self, email="gbowman@northstar.com"):
         self.email = email
         self.asked = []
@@ -141,7 +142,7 @@ class StubHunter:
 def test_hunter_finds_the_officers_own_address_and_the_filed_one_is_kept(rules, crules):
     hunter = StubHunter()
     lead = leads.build_lead(northstar(crules), StubPlaces(listing(website="")), None, rules, crules, 8, TODAY,
-                            hunter=hunter)
+                            email_finder=hunter)
     assert hunter.asked == [("northstar.com", "Gary", "Bowman")], "the domain comes from the filed email"
     row = build_row(lead, rules)
     assert (row["first_name"], row["email"]) == ("Gary", "gbowman@northstar.com")
@@ -152,24 +153,24 @@ def test_hunter_finds_the_officers_own_address_and_the_filed_one_is_kept(rules, 
 
 def test_nothing_verified_keeps_the_filed_email_labelled(rules, crules):
     lead = leads.build_lead(northstar(crules), StubPlaces(listing(website="")), None, rules, crules, 8, TODAY,
-                            hunter=StubHunter(""))
+                            email_finder=StubHunter(""))
     assert (lead.email, lead.email_belongs_to, lead.filed_email) == ("jryan@northstar.com", "someone else", "")
 
 
 def test_hunter_is_not_asked_when_the_email_is_the_officers(rules, crules):
     hunter = StubHunter()
     leads.build_lead(northstar(crules, email_address="gbowman@northstar.com"), StubPlaces(), None,
-                     rules, crules, 8, TODAY, hunter=hunter)
+                     rules, crules, 8, TODAY, email_finder=hunter)
     assert hunter.asked == []
 
 
 def test_a_gmail_only_company_uses_its_website_domain_or_nothing(rules, crules):
     hunter = StubHunter("gbowman@northstarcg.com")
     c = northstar(crules, email_address="jryan77@gmail.com")
-    leads.build_lead(c, StubPlaces(listing(website="")), None, rules, crules, 8, TODAY, hunter=hunter)
+    leads.build_lead(c, StubPlaces(listing(website="")), None, rules, crules, 8, TODAY, email_finder=hunter)
     assert hunter.asked == [], "no company domain to search"
     lead = leads.build_lead(c, StubPlaces(listing(website="https://northstarcg.com/")), None, rules, crules, 8,
-                            TODAY, hunter=hunter)
+                            TODAY, email_finder=hunter)
     assert hunter.asked == [("northstarcg.com", "Gary", "Bowman")]
     assert lead.email == "gbowman@northstarcg.com"
 
@@ -178,13 +179,14 @@ def test_the_officers_address_on_the_website_beats_asking_hunter(rules, crules, 
     site = crawl_of(("https://spanoandsons.com/team", "<p>gbowman@spanoandsons.com</p>"))
     monkeypatch.setattr(leads, "crawl_site", lambda *a, **k: site)
     hunter = StubHunter()
-    lead = leads.build_lead(northstar(crules), StubPlaces(), object(), rules, crules, 8, TODAY, hunter=hunter)
+    lead = leads.build_lead(northstar(crules), StubPlaces(), object(), rules, crules, 8, TODAY, email_finder=hunter)
     assert hunter.asked == []
     assert (lead.email, lead.filed_email) == ("gbowman@spanoandsons.com", "jryan@northstar.com")
 
 
 def test_a_run_stops_when_hunter_runs_out(workdir, monkeypatch):
     class OutHunter:
+        name = "Hunter.io"
         lookups, found = 1, 0
 
         def find(self, *args):
@@ -205,5 +207,5 @@ def test_a_run_stops_when_hunter_runs_out(workdir, monkeypatch):
     monkeypatch.setattr("contractor_loanscout.emailcheck.EmailChecker.problem", lambda self, e: "")
     options = cli.RunOptions(zip_prefixes=("191",), limit=0, out="out/leads.csv", workers=1)
     result = cli.run_leads(options, census=client(OtherPerson(3)), places=StubPlaces(listing(website="")),
-                           hunter=OutHunter())
+                           email_finder=OutHunter())
     assert result == cli.EXIT_SERPER_UNAVAILABLE

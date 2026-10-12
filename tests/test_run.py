@@ -169,6 +169,7 @@ def workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SERPER_API_KEY", "test-key")
     monkeypatch.setenv("HUNTER_API_KEY", "")  # never spend real Hunter credits in tests
+    monkeypatch.setenv("ANYMAILFINDER_API_KEY", "")  # nor Anymailfinder credits
     return tmp_path
 
 

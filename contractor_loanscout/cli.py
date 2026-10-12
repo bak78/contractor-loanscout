@@ -27,7 +27,9 @@ from .dot import (CensusClient, DotUnavailable, SearchStopped, check_zip_prefixe
 from .emailcheck import EmailChecker, EmailCheckUnavailable, domain_of
 from .export import CsvWriter, build_row, sort_csv_by_score
 from .fetch import PoliteFetcher
-from .hunter import HunterClient, HunterUnavailable
+from .anymailfinder import AnymailfinderClient
+from .emailfinder import EmailFinderUnavailable
+from .hunter import HunterClient
 from .leads import build_lead
 from .places import PlacesClient, SerperUnavailable
 
@@ -38,7 +40,7 @@ EXIT_NO_MATCHES = 1  # the census has no contractor leads for this area
 EXIT_CONFIG_ERROR = 2  # missing key, bad settings, data site unreachable
 EXIT_DEPLETED = 3  # every matching contractor already processed
 EXIT_LOOKUPS_FAILED = 4  # contractors were attempted and none could be looked up
-EXIT_SERPER_UNAVAILABLE = 5  # Serper or Hunter: bad key or out of credits; the run stopped early
+EXIT_SERPER_UNAVAILABLE = 5  # Serper or the email finder: bad key or out of credits; the run stopped early
 EXIT_INTERRUPTED = 130
 
 DEFAULT_OUT = "out/contractor_leads.csv"
@@ -78,8 +80,9 @@ class RunSummary:
     with_website: int = 0
     not_found: int = 0
     credits_used: int = 0
-    hunter_lookups: int = 0
-    hunter_found: int = 0
+    finder_name: str = ""
+    finder_lookups: int = 0
+    finder_found: int = 0
     serper_unavailable: bool = False
 
     def outcome(self) -> int:
@@ -115,9 +118,9 @@ class RunSummary:
         if self.not_found:
             log.info("%-32s %d", "  no Google listing", self.not_found)
         log.info("%-32s %d", "Serper credits used", self.credits_used)
-        if self.hunter_lookups:
-            log.info("%-32s %d  (%d verified emails found)", "Hunter searches", self.hunter_lookups,
-                     self.hunter_found)
+        if self.finder_lookups:
+            log.info("%-32s %d  (%d verified emails found)", f"{self.finder_name} searches",
+                     self.finder_lookups, self.finder_found)
         log.info("%-32s %d  ->  %s", "rows written", self.written, out_path)
         log.info(line)
 
@@ -127,9 +130,9 @@ def preview_path(out: str) -> str:
 
 
 def run_leads(options: RunOptions, stop: threading.Event | None = None,
-              census: CensusClient | None = None, places=None, hunter=None) -> int:
-    """census, places and hunter can be passed in (tests); otherwise real ones
-    are made — Hunter only when HUNTER_API_KEY is set."""
+              census: CensusClient | None = None, places=None, email_finder=None) -> int:
+    """census, places and email_finder can be passed in (tests); otherwise real
+    ones are made — the email finder only when its key is in .env."""
     stop = stop or threading.Event()
     try:
         settings = load_settings()
@@ -190,11 +193,11 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
 
     places = places or PlacesClient(api_key)
     fetcher = PoliteFetcher(settings.user_agent, default_delay=options.delay)
-    if hunter is None and settings.hunter_api_key and crules.hunter_when != "never":
-        hunter = HunterClient(settings.hunter_api_key)
-    if hunter is not None:
-        log.info("Hunter.io is on: when the filed email isn't the officer's own, it looks for theirs "
-                 "at the company's domain")
+    if email_finder is None and crules.email_finder_when != "never":
+        email_finder = make_email_finder(settings)
+    if email_finder is not None:
+        log.info("%s is on: when the filed email isn't the officer's own, it looks for theirs "
+                 "at the company's domain", email_finder.name)
 
     try:
         with CsvWriter(options.out, resume=not options.no_resume) as writer:
@@ -214,7 +217,7 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
             with ThreadPoolExecutor(max_workers=options.workers) as pool:
                 futures = {
                     pool.submit(build_lead, c, places, fetcher, rules, crules, options.max_pages,
-                                email_checker=checker, hunter=hunter): c
+                                email_checker=checker, email_finder=email_finder): c
                     for c in pending
                 }
                 not_done = set(futures)
@@ -229,7 +232,7 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
                             summary.attempted += 1
                             try:
                                 lead = future.result()
-                            except (SerperUnavailable, HunterUnavailable) as exc:
+                            except (SerperUnavailable, EmailFinderUnavailable) as exc:
                                 log.error("%s — stopping; finished rows are saved", exc)
                                 summary.serper_unavailable = True
                                 raise
@@ -246,7 +249,7 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
                                      contractor.company_name,
                                      f"{row['first_name']} {row['last_name']}".strip() or "-",
                                      row["score"], row["email"] or row["phone"] or "-")
-                except (KeyboardInterrupt, SerperUnavailable, HunterUnavailable):
+                except (KeyboardInterrupt, SerperUnavailable, EmailFinderUnavailable):
                     fetcher.stop()
                     pool.shutdown(wait=False, cancel_futures=True)
                     raise
@@ -254,20 +257,30 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
         log.warning("stopped — %d rows already written to %s (run again to continue)",
                     summary.written, options.out)
         return EXIT_INTERRUPTED
-    except (SerperUnavailable, HunterUnavailable):
+    except (SerperUnavailable, EmailFinderUnavailable):
         pass
     finally:
         summary.credits_used = getattr(places, "lookups", 0)
-        summary.hunter_lookups = getattr(hunter, "lookups", 0)
-        summary.hunter_found = getattr(hunter, "found", 0)
+        summary.finder_name = getattr(email_finder, "name", "")
+        summary.finder_lookups = getattr(email_finder, "lookups", 0)
+        summary.finder_found = getattr(email_finder, "found", 0)
         fetcher.close()
         places.close()
-        if hunter is not None:
-            hunter.close()
+        if email_finder is not None:
+            email_finder.close()
 
     sort_csv_by_score(options.out)
     summary.report(options.out)
     return summary.outcome()
+
+
+def make_email_finder(settings):
+    """Anymailfinder when its key is in .env, else Hunter.io, else none."""
+    if settings.anymailfinder_api_key:
+        return AnymailfinderClient(settings.anymailfinder_api_key)
+    if settings.hunter_api_key:
+        return HunterClient(settings.hunter_api_key)
+    return None
 
 
 EMAIL_CHECK_WORKERS = 32
