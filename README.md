@@ -77,6 +77,19 @@ safety rating, the top three pieces of evidence, and notes.
 - **National fleets** — over 150 trucks.
 - **Stale filings** — not updated in 4 years: the contacts are likely out of
   date.
+- **Disqualified companies** — nonprofits, lenders, public and very large
+  companies, found on their websites during a Run. They go to
+  `out\contractor_leads_left_out.csv` with the reason, not the results, and
+  no email-finder credit is spent on them.
+- **Corporate groups** — at the end of every Run, a website or email domain
+  shared by 3 or more different companies in the results (Installed Building
+  Products' insulation companies, each filing with US DOT on its own) moves
+  them to the left-out file. Email providers (gmail, cox…), website builders,
+  government sites and the franchise brands in `franchise_domains` in
+  `config\contractor.yaml` never count — a franchise location is a small
+  business. `chain_min_companies: 0` turns this off.
+
+Anything in the left-out file can be copied back into the results by hand.
 
 In Philadelphia this takes 1,011 census carriers hauling construction cargo
 down to about 390 contractor leads.
@@ -90,9 +103,12 @@ Google lookup, so no credits go to the rest (set `require_email: false` in
 - it is a real address — not a placeholder (none@, test@) or no-reply box,
   and not a misspelled domain (gmial.com, comcast.com);
 - its domain exists and accepts mail (DNS lists a mail server for it);
-- it isn't a filing service's — an address filed for 5 or more carriers;
-- no higher-ranked contractor uses it — sister companies often share an
-  inbox, and each person should get one email.
+- it isn't a filing service's — an address filed for 5 or more carriers, or
+  a domain giving 5 or more carriers mailboxes named after each one
+  (`peninsula.paving@transervices.com`);
+- no higher-ranked contractor uses it, in this Run or an earlier one (another
+  state's, say) — sister companies often share an inbox, and each person
+  should get one email.
 
 In Philadelphia, 372 of 386 contractor leads pass.
 

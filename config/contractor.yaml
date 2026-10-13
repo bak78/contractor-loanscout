@@ -21,7 +21,9 @@ default_limit: 50
 require_email: true
 
 # An email filed for this many different carriers or more belongs to a
-# filing service or agent, not the business, and doesn't count.
+# filing service or agent, not the business, and doesn't count. So does a
+# domain giving that many carriers mailboxes named after each one
+# (peninsula.paving@transervices.com, merit.construction@transervices.com).
 agent_email_carriers: 5
 
 # Email finder (optional): Anymailfinder (ANYMAILFINDER_API_KEY in .env) or
@@ -34,6 +36,24 @@ agent_email_carriers: 5
 #   not_officer  ask whenever the email isn't the officer's own
 #   never        don't use an email finder
 email_finder_when: not_officer
+
+# Chains and corporate groups. Each subsidiary of a group files with US DOT
+# on its own (Installed Building Products' insulation companies, each under
+# 150 trucks). Their shared website or email domain gives them away: at the
+# end of every run, a domain shared by this many different companies in the
+# results moves them to <results>_left_out.csv. 0 turns this off.
+chain_min_companies: 3
+
+# Franchise brands: each location is independently owned (a small business)
+# though all share the brand's domain. Never treated as a group. Add any other
+# brand or group whose members should stay leads.
+franchise_domains: [
+  servpro.com, pauldavis.com, mrrooter.com, mrelectric.com, onehourheatandair.com,
+  benjaminfranklinplumbing.com, aireserv.com, glassdoctor.com, mrhandyman.com, certapro.com,
+  fivestarpainting.com, bathfitter.com, rebath.com, restoration1.com, puroclean.com,
+  rainbowrestores.com, 1800gotjunk.com, collegehunkshaulingjunk.com, junk-king.com,
+  lawndoctor.com, weedman.com, groundsguys.com, precisiondoor.net, budgetblinds.com,
+]
 
 # Cargo the carrier told US DOT it hauls. A carrier is a candidate when it
 # ticks any of these. Census column names; see the FMCSA data dictionary.

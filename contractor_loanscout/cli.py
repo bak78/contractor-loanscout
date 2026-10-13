@@ -12,6 +12,7 @@ next run.
 from __future__ import annotations
 
 import argparse
+import csv
 import logging
 import sys
 import threading
@@ -21,11 +22,12 @@ from collections import Counter
 from dataclasses import dataclass
 
 from .config import ConfigError, load_settings
+from .cleanup import LeftOutWriter, leave_out_chains, left_out_path, never_a_chain
 from .crawl import DEFAULT_MAX_PAGES
 from .dot import (CensusClient, DotUnavailable, SearchStopped, check_zip_prefixes,
                   find_contractors, load_contractor_rules)
 from .emailcheck import EmailChecker, EmailCheckUnavailable, domain_of
-from .export import CsvWriter, build_row, sort_csv_by_score
+from .export import COLUMNS, CsvWriter, build_row, sort_csv_by_score
 from .fetch import PoliteFetcher
 from .anymailfinder import AnymailfinderClient
 from .emailfinder import EmailFinderUnavailable
@@ -68,6 +70,8 @@ class RunSummary:
     matching: int = 0
     no_email: int = 0
     shared_email: int = 0
+    disqualified: int = 0
+    chains: int = 0
     already_done: int = 0
     attempted: int = 0
     written: int = 0
@@ -104,6 +108,8 @@ class RunSummary:
             log.info("%-32s %d", "  left out: no working email", self.no_email)
         if self.shared_email:
             log.info("%-32s %d", "  left out: email already used", self.shared_email)
+        if self.disqualified:
+            log.info("%-32s %d", "  left out: disqualified", self.disqualified)
         if self.already_done:
             log.info("%-32s %d", "skipped (already done)", self.already_done)
         log.info("%-32s %d", "processed this run", self.attempted)
@@ -122,6 +128,10 @@ class RunSummary:
             log.info("%-32s %d  (%d verified emails found)", f"{self.finder_name} searches",
                      self.finder_lookups, self.finder_found)
         log.info("%-32s %d  ->  %s", "rows written", self.written, out_path)
+        if self.chains:
+            log.info("%-32s %d", "moved out: chains or groups", self.chains)
+        if self.disqualified or self.chains:
+            log.info("%-32s %s", "left-out rows (with reasons)", left_out_path(out_path))
         log.info(line)
 
 
@@ -180,7 +190,8 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
     checker = EmailChecker()
     if crules.require_email:
         try:
-            ranked = keep_working_emails(ranked, checker, summary, stop)
+            already = {} if options.dry_run or options.no_resume else emails_in(options.out)
+            ranked = keep_working_emails(ranked, checker, summary, stop, already)
         except SearchStopped:
             log.warning("stopped while checking emails — nothing was written")
             return EXIT_INTERRUPTED
@@ -190,6 +201,9 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
 
     if options.dry_run:
         return _preview(ranked, options, limit, rules, crules, summary)
+
+    used_emails = {} if options.no_resume else emails_in(options.out)
+    left_out = LeftOutWriter(options.out, COLUMNS)
 
     places = places or PlacesClient(api_key)
     fetcher = PoliteFetcher(settings.user_agent, default_delay=options.delay)
@@ -242,8 +256,27 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
                                             contractor.company_name, exc)
                                 continue
 
+                            if lead.score.disqualified:
+                                # Not a small-business borrower: kept for review, not as a lead.
+                                writer.mark_done(contractor.key)
+                                left_out.write(build_row(lead, rules), f"disqualified: {lead.score.disqualify_reason}")
+                                summary.disqualified += 1
+                                log.info("%-36.36s left out: disqualified (%s)", contractor.company_name,
+                                         lead.score.disqualify_reason)
+                                continue
+
+                            # The email finder may have swapped in an address an
+                            # earlier run (or another company) already uses.
+                            if used_emails.get(lead.email, contractor.key) != contractor.key:
+                                writer.mark_done(contractor.key)
+                                summary.shared_email += 1
+                                log.info("%-36.36s left out: %s already used for another lead",
+                                         contractor.company_name, lead.email)
+                                continue
+
                             row = build_row(lead, rules)
                             writer.write(row)
+                            used_emails[lead.email] = contractor.key
                             _tally(summary, row, lead)
                             log.info("%-36.36s %-22.22s score=%-5s %s",
                                      contractor.company_name,
@@ -269,9 +302,30 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
         if email_finder is not None:
             email_finder.close()
 
+    summary.chains = _leave_out_chains(options.out, crules, rules)
     sort_csv_by_score(options.out)
     summary.report(options.out)
     return summary.outcome()
+
+
+def _leave_out_chains(out: str, crules, rules) -> int:
+    """Move corporate groups' rows out of the results; how many moved."""
+    moved = leave_out_chains(out, COLUMNS, crules.chain_min_companies,
+                             never_a_chain(crules.franchise_domains, rules.domain_blocklist))
+    for domain, count in sorted(moved.items(), key=lambda x: -x[1]):
+        log.info("left out %d rows sharing %s (a corporate group or chain; add it to franchise_domains "
+                 "in contractor.yaml to keep them)", count, domain)
+    return sum(moved.values())
+
+
+def emails_in(path: str) -> dict[str, str]:
+    """Emails already in the results, and whose they are (USDOT number), so a
+    later run (another state, say) doesn't list the same inbox again."""
+    try:
+        with open(path, newline="", encoding="utf-8") as handle:
+            return {row["email"].lower(): row.get("key", "") for row in csv.DictReader(handle) if row.get("email")}
+    except (OSError, KeyError):
+        return {}
 
 
 def make_email_finder(settings):
@@ -288,7 +342,7 @@ UNREACHABLE = "couldn't check the domain (try again later)"
 
 
 def keep_working_emails(ranked: list, checker: EmailChecker, summary: RunSummary,
-                        stop: threading.Event | None = None) -> list:
+                        stop: threading.Event | None = None, already: dict[str, str] | None = None) -> list:
     """The contractors whose census email passes the checks, best first, with
     each address kept only once (sister companies often share one inbox).
     Free — done before any lookup, so no credits go to the rest.
@@ -335,7 +389,7 @@ def keep_working_emails(ranked: list, checker: EmailChecker, summary: RunSummary
         problem = problems.get(c.email, "no email") if c.email else "no email on file"
         if problem:
             why[problem] += 1
-        elif c.email in used:
+        elif c.email in used or (already or {}).get(c.email, c.key) != c.key:
             summary.shared_email += 1
         else:
             used.add(c.email)
@@ -379,6 +433,9 @@ def _preview(ranked, options, limit, rules, crules, summary) -> int:
             summary.attempted += 1
             _tally(summary, row, lead)
 
+    # The preview starts over each time, and so does its left-out file.
+    left_out_path(out).unlink(missing_ok=True)
+    summary.chains = _leave_out_chains(out, crules, rules)
     sort_csv_by_score(out)
     next_run = min(limit, len(ranked)) if limit > 0 else len(ranked)
     log.info("preview only — no Google lookups made. The next real run would look up the "

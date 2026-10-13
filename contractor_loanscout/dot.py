@@ -27,7 +27,9 @@ import requests
 import yaml
 
 from .config import DATA_DIR, DEFAULT_CONTRACTOR_PATH, ConfigError
+from .cleanup import SHARED_MAIL
 from .contacts import _format_phone
+from .emailcheck import FREE_MAIL
 
 log = logging.getLogger(__name__)
 
@@ -88,6 +90,8 @@ class ContractorRules:
     require_email: bool = True
     agent_email_carriers: int = 5
     email_finder_when: str = "not_officer"
+    chain_min_companies: int = 3
+    franchise_domains: tuple[str, ...] = ()
 
     def excluded(self, *names: str) -> str:
         """Why a carrier is never a lead, by its names, or ''."""
@@ -159,6 +163,8 @@ def load_contractor_rules(path: Path | str = DEFAULT_CONTRACTOR_PATH) -> Contrac
         require_email=bool(raw.get("require_email", True)),
         agent_email_carriers=int(raw.get("agent_email_carriers", 5)),
         email_finder_when=_email_finder_when(raw.get("email_finder_when", raw.get("hunter_when", "not_officer"))),
+        chain_min_companies=int(raw.get("chain_min_companies", 3)),
+        franchise_domains=tuple(str(d).strip().lower() for d in raw.get("franchise_domains") or []),
     )
 
 
@@ -481,19 +487,52 @@ def find_contractors(client: CensusClient, rules: ContractorRules, state: str,
     records = client.search(state, zip_prefixes, rules.cargo)
     log.info("US DOT census: %d active carriers hauling construction cargo found", len(records))
 
-    # A filing service enters its own email on every carrier it files for.
-    carriers_by_email: dict[str, set[str]] = {}
-    for record in records:
-        email = (record.get("email_address") or "").strip().lower()
-        if email:
-            carriers_by_email.setdefault(email, set()).add(str(record.get("dot_number") or ""))
-    agents = {e for e, dots in carriers_by_email.items() if len(dots) >= rules.agent_email_carriers}
+    agents, agent_domains = filing_agents(records, rules.agent_email_carriers)
 
     leads = []
     for record in records:
         contractor = parse_carrier(record, rules, today)
         if contractor is not None:
-            if contractor.email in agents:
+            if contractor.email in agents or contractor.email.rpartition("@")[2] in agent_domains:
                 contractor = replace(contractor, email="")
             leads.append(contractor)
     return leads
+
+
+# Words in a carrier's name that say nothing about which carrier it is.
+_GENERIC = {"inc", "llc", "corp", "company", "the", "and", "construction", "contracting", "services",
+            "service", "group", "trucking", "transport", "transportation", "enterprises"}
+# Fewest mailboxes named after their own carrier that mark a domain as a filing service's.
+AGENT_NAMED_MAILBOXES = 3
+
+
+def _named_after(email: str, record: dict) -> bool:
+    """jones.paving@agency.com for Jones Paving Inc: a mailbox named after its carrier."""
+    mailbox = re.sub(r"[^a-z]", "", email.partition("@")[0])
+    words = re.findall(r"[a-z]+", f"{record.get('legal_name') or ''} {record.get('dba_name') or ''}".lower())
+    return any(len(w) >= 4 and w not in _GENERIC and w in mailbox for w in words)
+
+
+def filing_agents(records: list[dict], min_carriers: int) -> tuple[set[str], set[str]]:
+    """Emails and domains that belong to a filing service, not the business.
+
+    A service enters its own address on every carrier it files for
+    (wyatt@transervices.com on dozens), or gives each client a mailbox named
+    after it at its own domain (peninsula.paving@transervices.com,
+    nagel.farm.services@transervices.com). Either reaches the service."""
+    carriers_by_email: dict[str, set[str]] = {}
+    by_domain: dict[str, dict[str, bool]] = {}
+    for record in records:
+        email = (record.get("email_address") or "").strip().lower()
+        dot = str(record.get("dot_number") or "")
+        if not email or "@" not in email:
+            continue
+        carriers_by_email.setdefault(email, set()).add(dot)
+        by_domain.setdefault(email.rpartition("@")[2], {})[dot] = _named_after(email, record)
+    agents = {e for e, dots in carriers_by_email.items() if len(dots) >= min_carriers}
+    # Gmail, Comcast and the like hold countless mailboxes named after their
+    # owners' companies (lavalandscaping@gmail.com): never a filing service.
+    agent_domains = {d for d, named in by_domain.items()
+                     if d not in FREE_MAIL and d not in SHARED_MAIL
+                     and len(named) >= min_carriers and sum(named.values()) >= AGENT_NAMED_MAILBOXES}
+    return agents, agent_domains

@@ -233,6 +233,11 @@ def build_lead(
 
     site_email, site_page, is_officer = website_email(crawl, c, email_checker)
 
+    # The website's own signals. One that disqualifies the company (a
+    # supplier, a lender, a public company...) means no paid email search.
+    site_hits = match_site(crawl.pages, rules) if crawl is not None and crawl.pages else []
+    disqualified = any(h.category == "disqualify" for h in site_hits)
+
     # Who the row addresses, and which email reaches them. The filed email is
     # often whoever filled in the form; when it names the second officer, the
     # row addresses them instead, and when it's nobody's in particular, the
@@ -250,7 +255,8 @@ def build_lead(
     if belongs not in ("officer", "") and first:
         if site_email and is_officer:
             email, source, belongs, filed = site_email, f"website ({site_page})", "officer", c.email
-        elif email_finder is not None and contractor_rules.email_finder_when == "not_officer":
+        elif (email_finder is not None and contractor_rules.email_finder_when == "not_officer"
+              and not disqualified):
             domain = company_domain(c, listing, rules)
             found = email_finder.find(domain, first, last) if domain else None
             if found and found.email and email_is_theirs(found.email, domain) and (
@@ -263,9 +269,7 @@ def build_lead(
     if trade == DEFAULT_TRADE and listing.category:
         trade = contractor_rules.trade_of(listing.category) or listing.category
 
-    hits = dot_hits(c, contractor_rules, today) + google_hits(listing, contractor_rules)
-    if crawl is not None and crawl.pages:
-        hits += match_site(crawl.pages, rules)
+    hits = dot_hits(c, contractor_rules, today) + google_hits(listing, contractor_rules) + site_hits
 
     return Lead(c, listing, crawl, score_site(hits, rules), trade, site_email, site_page, is_officer,
                 contact_first=first, contact_last=last, contact_level=level, other_officer=other,
