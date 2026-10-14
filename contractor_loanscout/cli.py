@@ -31,7 +31,6 @@ from .export import COLUMNS, CsvWriter, build_row, sort_csv_by_score
 from .fetch import PoliteFetcher
 from .anymailfinder import AnymailfinderClient
 from .emailfinder import EmailFinderUnavailable
-from .hunter import HunterClient
 from .leads import build_lead
 from .places import PlacesClient, SerperUnavailable
 
@@ -329,11 +328,9 @@ def emails_in(path: str) -> dict[str, str]:
 
 
 def make_email_finder(settings):
-    """Anymailfinder when its key is in .env, else Hunter.io, else none."""
+    """Anymailfinder when its key is in .env, else none."""
     if settings.anymailfinder_api_key:
         return AnymailfinderClient(settings.anymailfinder_api_key)
-    if settings.hunter_api_key:
-        return HunterClient(settings.hunter_api_key)
     return None
 
 

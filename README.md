@@ -51,7 +51,7 @@ are then cached for a week in `data\dot_cache`. A free `SOCRATA_APP_TOKEN` in
 |---|---|
 | `first_name`, `last_name` | The first company officer named on the US DOT filing — or the second, when the email is theirs |
 | `decision_maker` | *owner* when the officer's surname is in the business name (Mike **Spano** & Sons), otherwise *company officer* |
-| `email` | Filed with US DOT — or the officer's own address from the website or the email finder (Anymailfinder or Hunter.io), when the filed one isn't theirs |
+| `email` | Filed with US DOT — or the officer's own address from the website or Anymailfinder, when the filed one isn't theirs |
 | `email_belongs_to` | Whose inbox it is: *the officer named*, *company inbox*, *someone else at the company*, or *unclear* — see below |
 | `phone` | Filed with US DOT; `cell_phone` too when given |
 | `company_name` | The name the public knows it by (its DBA when it has one) |
@@ -134,12 +134,11 @@ When the email is the *second* officer's, the row names them instead. In
 Philadelphia: 138 of 372 are the officer's, 113 a company inbox, 77 unclear,
 44 someone else.
 
-**Email finder: Anymailfinder or Hunter.io (optional).** With
-`ANYMAILFINDER_API_KEY` (or `HUNTER_API_KEY`) in `.env` — the same keys as
-Healthcare LoanScout — a Run asks the email finder for the officer's own
-address whenever the email isn't theirs and the company has its own domain:
-from the filed email (`northstar.com`) or its website. For Northstar, Hunter
-verified `gbowman@northstar.com`. Only verified addresses are used; the filed
+**Email finder: Anymailfinder (optional).** With `ANYMAILFINDER_API_KEY` in
+`.env` — the same key as Healthcare LoanScout — a Run asks Anymailfinder for
+the officer's own address whenever the email isn't theirs and the company has
+its own domain: from the filed email (`northstar.com`) or its website. For
+Northstar, it verified `gbowman@northstar.com`. Only verified addresses are used; the filed
 email moves to `filed_email`. Email finders can't search gmail-style
 addresses, so this helps the ~54 Philadelphia leads with a company domain, not
 the rest. Anymailfinder charges only for verified emails found. Set

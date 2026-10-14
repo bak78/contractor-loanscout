@@ -168,8 +168,7 @@ def test_a_poor_safety_rating_is_noted(rules, crules):
 def workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SERPER_API_KEY", "test-key")
-    monkeypatch.setenv("HUNTER_API_KEY", "")  # never spend real Hunter credits in tests
-    monkeypatch.setenv("ANYMAILFINDER_API_KEY", "")  # nor Anymailfinder credits
+    monkeypatch.setenv("ANYMAILFINDER_API_KEY", "")  # never spend real Anymailfinder credits in tests
     return tmp_path
 
 

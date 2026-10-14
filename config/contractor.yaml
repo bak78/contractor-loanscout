@@ -26,8 +26,7 @@ require_email: true
 # (peninsula.paving@transervices.com, merit.construction@transervices.com).
 agent_email_carriers: 5
 
-# Email finder (optional): Anymailfinder (ANYMAILFINDER_API_KEY in .env) or
-# Hunter.io (HUNTER_API_KEY); Anymailfinder is used when both are set. The
+# Email finder (optional): Anymailfinder (ANYMAILFINDER_API_KEY in .env). The
 # email on a US DOT filing is often whoever filled in the form (jryan@ for
 # officer Gary Bowman). When the email isn't the officer's own and the company
 # has its own domain, the finder is asked for the officer's address there;

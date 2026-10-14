@@ -162,7 +162,7 @@ def load_contractor_rules(path: Path | str = DEFAULT_CONTRACTOR_PATH) -> Contrac
         freight_words=tuple(str(w) for w in raw.get("freight_words") or []),
         require_email=bool(raw.get("require_email", True)),
         agent_email_carriers=int(raw.get("agent_email_carriers", 5)),
-        email_finder_when=_email_finder_when(raw.get("email_finder_when", raw.get("hunter_when", "not_officer"))),
+        email_finder_when=_email_finder_when(raw.get("email_finder_when", "not_officer")),
         chain_min_companies=int(raw.get("chain_min_companies", 3)),
         franchise_domains=tuple(str(d).strip().lower() for d in raw.get("franchise_domains") or []),
     )

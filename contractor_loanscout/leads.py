@@ -242,7 +242,7 @@ def build_lead(
     # often whoever filled in the form; when it names the second officer, the
     # row addresses them instead, and when it's nobody's in particular, the
     # officer's own address is looked for: on the website, then with the
-    # email finder (Anymailfinder or Hunter).
+    # email finder (Anymailfinder).
     first, last, level, other = c.officer_first, c.officer_last, c.officer_level, c.second_officer
     email, source, filed = c.email, "US DOT filing", ""
     belongs = email_owner(c.email, c) if c.email else ""
