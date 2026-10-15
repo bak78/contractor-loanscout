@@ -117,7 +117,7 @@ def test_a_run_stops_when_email_finder_runs_out(workdir, monkeypatch):
         name = "Anymailfinder"
         lookups, found = 1, 0
 
-        def find(self, *args):
+        def find(self, *args, **kwargs):
             raise AnymailfinderUnavailable("Anymailfinder is out of credits")
 
         def close(self):

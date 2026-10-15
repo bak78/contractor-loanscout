@@ -92,6 +92,7 @@ class ContractorRules:
     email_finder_when: str = "not_officer"
     chain_min_companies: int = 3
     franchise_domains: tuple[str, ...] = ()
+    national_chains: tuple[str, ...] = ()
 
     def excluded(self, *names: str) -> str:
         """Why a carrier is never a lead, by its names, or ''."""
@@ -165,6 +166,7 @@ def load_contractor_rules(path: Path | str = DEFAULT_CONTRACTOR_PATH) -> Contrac
         email_finder_when=_email_finder_when(raw.get("email_finder_when", "not_officer")),
         chain_min_companies=int(raw.get("chain_min_companies", 3)),
         franchise_domains=tuple(str(d).strip().lower() for d in raw.get("franchise_domains") or []),
+        national_chains=tuple(str(d).strip().lower() for d in raw.get("national_chains") or []),
     )
 
 

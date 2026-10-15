@@ -27,7 +27,8 @@ from .crawl import DEFAULT_MAX_PAGES
 from .dot import (CensusClient, DotUnavailable, SearchStopped, check_zip_prefixes,
                   find_contractors, load_contractor_rules)
 from .emailcheck import EmailChecker, EmailCheckUnavailable, domain_of
-from .export import COLUMNS, CsvWriter, build_row, sort_csv_by_score
+from .contacts import is_wrong_department
+from .export import COLUMNS, CsvWriter, build_row, remembered_emails, sort_csv_by_score
 from .fetch import PoliteFetcher
 from .anymailfinder import AnymailfinderClient
 from .emailfinder import EmailFinderUnavailable
@@ -70,6 +71,7 @@ class RunSummary:
     no_email: int = 0
     shared_email: int = 0
     disqualified: int = 0
+    wrong_department: int = 0
     chains: int = 0
     already_done: int = 0
     attempted: int = 0
@@ -109,6 +111,8 @@ class RunSummary:
             log.info("%-32s %d", "  left out: email already used", self.shared_email)
         if self.disqualified:
             log.info("%-32s %d", "  left out: disqualified", self.disqualified)
+        if self.wrong_department:
+            log.info("%-32s %d", "  left out: department inbox", self.wrong_department)
         if self.already_done:
             log.info("%-32s %d", "skipped (already done)", self.already_done)
         log.info("%-32s %d", "processed this run", self.attempted)
@@ -129,7 +133,7 @@ class RunSummary:
         log.info("%-32s %d  ->  %s", "rows written", self.written, out_path)
         if self.chains:
             log.info("%-32s %d", "moved out: chains or groups", self.chains)
-        if self.disqualified or self.chains:
+        if self.disqualified or self.chains or self.wrong_department:
             log.info("%-32s %s", "left-out rows (with reasons)", left_out_path(out_path))
         log.info(line)
 
@@ -264,9 +268,19 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
                                          lead.score.disqualify_reason)
                                 continue
 
+                            if is_wrong_department(lead.email):
+                                # hr@, billing@, compliance@: no officer's own address
+                                # was found to use instead, and the owner won't read it.
+                                writer.mark_done(contractor.key)
+                                left_out.write(build_row(lead, rules), f"department inbox: {lead.email}")
+                                summary.wrong_department += 1
+                                log.info("%-36.36s left out: %s is a department's inbox",
+                                         contractor.company_name, lead.email)
+                                continue
+
                             # The email finder may have swapped in an address an
                             # earlier run (or another company) already uses.
-                            if used_emails.get(lead.email, contractor.key) != contractor.key:
+                            if used_emails.get(lead.email.lower(), contractor.key) != contractor.key:
                                 writer.mark_done(contractor.key)
                                 summary.shared_email += 1
                                 log.info("%-36.36s left out: %s already used for another lead",
@@ -275,7 +289,7 @@ def run_leads(options: RunOptions, stop: threading.Event | None = None,
 
                             row = build_row(lead, rules)
                             writer.write(row)
-                            used_emails[lead.email] = contractor.key
+                            used_emails[lead.email.lower()] = contractor.key
                             _tally(summary, row, lead)
                             log.info("%-36.36s %-22.22s score=%-5s %s",
                                      contractor.company_name,
@@ -318,13 +332,18 @@ def _leave_out_chains(out: str, crules, rules) -> int:
 
 
 def emails_in(path: str) -> dict[str, str]:
-    """Emails already in the results, and whose they are (USDOT number), so a
+    """Emails already used, and whose they are (USDOT number) — in the results,
+    or in an earlier batch whose results file has since been deleted — so a
     later run (another state, say) doesn't list the same inbox again."""
+    used = remembered_emails(path)
     try:
         with open(path, newline="", encoding="utf-8") as handle:
-            return {row["email"].lower(): row.get("key", "") for row in csv.DictReader(handle) if row.get("email")}
+            for row in csv.DictReader(handle):
+                if row.get("email"):
+                    used.setdefault(row["email"].strip().lower(), row.get("key", ""))
     except (OSError, KeyError):
-        return {}
+        pass
+    return used
 
 
 def make_email_finder(settings):

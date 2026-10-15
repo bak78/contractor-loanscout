@@ -93,7 +93,7 @@ def test_no_paid_search_for_a_company_its_website_disqualifies(rules, crules, mo
         name = "Anymailfinder"
         asked = []
 
-        def find(self, *args):
+        def find(self, *args, **kwargs):
             self.asked.append(args)
             return FinderResult()
 

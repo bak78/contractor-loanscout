@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from .config import Rules
-from .contacts import is_role_address
+from .contacts import is_role_address, is_wrong_department
 from .crawl import SiteCrawl, crawl_site, is_crawlable, registered_domain
 from .emailcheck import FREE_MAIL, EmailChecker, domain_of
 from .dot import Contractor, ContractorRules, split_person
@@ -106,6 +106,18 @@ def google_hits(listing: Listing, rules: ContractorRules) -> list[SignalHit]:
     return hits
 
 
+def national_chain_hits(website: str, emails: tuple[str, ...], chains: tuple[str, ...]) -> list[SignalHit]:
+    """A disqualifying hit when the website or an email belongs to a national
+    company (national_chains in contractor.yaml): a U-Haul or Home Depot store
+    files with US DOT for its own trucks, but isn't a small-business borrower."""
+    domains = {registered_domain(website) if website else ""} | {domain_of(e) for e in emails if e}
+    for domain in sorted(d for d in domains if d in chains):
+        return [SignalHit(signal_id="national_chain", category="disqualify", weight=0.0,
+                          snippet=f"{domain} is a national company (national_chains in contractor.yaml)",
+                          source_url=website or domain, page_type="registry")]
+    return []
+
+
 def _letters(text: str) -> str:
     return re.sub(r"[^a-z]", "", (text or "").lower())
 
@@ -189,7 +201,8 @@ def website_email(crawl: SiteCrawl | None, c: Contractor,
         return "", "", False
 
     def usable(email: str) -> bool:
-        return email_is_theirs(email, crawl.domain) and (checker is None or checker.ok(email))
+        return (email_is_theirs(email, crawl.domain) and not is_wrong_department(email)
+                and (checker is None or checker.ok(email)))
 
     for page in crawl.pages:
         for email in page.contacts.emails:
@@ -223,8 +236,11 @@ def build_lead(
     if places is None:
         listing = Listing(note="preview: not looked up")
     else:
-        listing = places.find(c.search_name, c.address, c.city, c.state, c.zip)
-        if not listing.matched_on:
+        listing = places.find(c.search_name, c.address, c.city, c.state, c.zip,
+                              names=(c.legal_name, c.dba, c.officer_full, c.second_officer),
+                              phones=(c.phone, c.cell_phone),
+                              domains=(company_domain(c, Listing(), rules),))
+        if not listing.matched_on and "another business" not in listing.note:
             listing = Listing(note=f"{listing.note}; may have moved, or works from a yard not on Google")
 
     crawl = None
@@ -236,6 +252,7 @@ def build_lead(
     # The website's own signals. One that disqualifies the company (a
     # supplier, a lender, a public company...) means no paid email search.
     site_hits = match_site(crawl.pages, rules) if crawl is not None and crawl.pages else []
+    site_hits += national_chain_hits(listing.website, (c.email, site_email), contractor_rules.national_chains)
     disqualified = any(h.category == "disqualify" for h in site_hits)
 
     # Who the row addresses, and which email reaches them. The filed email is

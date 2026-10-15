@@ -54,6 +54,20 @@ franchise_domains: [
   lawndoctor.com, weedman.com, groundsguys.com, precisiondoor.net, budgetblinds.com,
 ]
 
+# National companies: each branch or store files with US DOT for its own
+# trucks, so one location can look like a small contractor. A website or email
+# on one of these domains means it's left out before any paid email search
+# (to <results>_left_out.csv). Add any you spot in the results.
+national_chains: [
+  uhaul.com, homedepot.com, lowes.com, 84lumber.com, bldr.com, buildersfirstsource.com,
+  abcsupply.com, ferguson.com, beaconroofingsupply.com, becn.com, srsdistribution.com, gms.com,
+  unitedrentals.com, sunbeltrentals.com, hercrentals.com, wm.com, republicservices.com,
+  wasteconnections.com, casella.com, vulcanmaterials.com, martinmarietta.com, oldcastle.com,
+  crh.com, cemex.com, heidelbergmaterials.us, lehighhanson.com, installedbuildingproducts.com,
+  topbuild.com, trugreen.com, brightview.com, terminix.com, orkin.com, comcast.com, verizon.com,
+  att.com, quantaservices.com, mastec.com, dycomind.com, emcorgroup.com, comfortsystemsusa.com,
+]
+
 # Cargo the carrier told US DOT it hauls. A carrier is a candidate when it
 # ticks any of these. Census column names; see the FMCSA data dictionary.
 #   crgo_construct  Construction
